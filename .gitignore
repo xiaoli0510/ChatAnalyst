@@ -1,1 +1,15 @@
-bot/.env
+# 1. 忽略所有层级的虚拟环境
+.venv/
+venv/
+
+# 2. 忽略所有的 Python 缓存
+__pycache__/
+*.py[cod]
+
+# 3. 忽略所有子目录下的 .env 文件（完美匹配你的 bot/.env）
+*/.env
+.env
+
+# 4. 忽略本地数据库/临时文件（如果你之后用到了）
+*.sqlite3
+*.log
