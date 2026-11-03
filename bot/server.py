@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain_core.output_parsers import StrOutputParser
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
@@ -11,20 +12,66 @@ app = FastAPI()
 
 load_dotenv()
 
+
 @tool
 def dummy_tool(query: str) -> str:
     """这是一个占位工具"""
     return "工具被执行了"
+
+
 class Master:
     def __init__(self):
         self.chatmodel = ChatOpenAI(
             model="qwen-max",
             temperature=0,
             streaming=True,
-            api_key = os.getenv("DASHSCOPE_API_KEY"),
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )  # 聊天模型
         self.MEMORY_KEY = "chat_history"  # 存的key
+        self.QingXu="default"
+        self.MOODS = {
+            "default": {
+                "roleSet": ""
+            },
+            "upbeat": {
+                "roleSet": """
+                       - 你此时也非常兴奋并表现得很有活力。
+                       - 你会根据上下文，以一种非常兴奋的语气来回答问题。
+                       - 你会添加类似"太棒了！","真是太好了!","真是太棒了!"等语气词。
+                       - 同时你会提醒用户切莫过于兴奋，以免乐极生悲。
+                       """
+            },
+            "angry": {
+                "roleSet": """
+                      - 你会以更多温柔的语气来回答问题。
+                      - 你会在回答的时候加上一些安慰的语句，比如生气对身体不好等。
+                      - 你会提醒用户不要被愤怒冲昏了头脑。
+                       """
+            },
+            "depressed": {
+                "roleSet": """
+                       - 你会以兴奋的语气来回答问题。
+                      - 你会在回答的时候加上一些激励的语句，比如加油等。
+                      - 你会提醒用户要保持乐观的心态。
+                       """
+            },
+            "friendly": {
+                "roleSet": """
+                       - 你会以友好的语气来回答问题。
+                       - 你会在回答的时候加上一些友好的语句，比如亲爱的等。
+                       - 你会随机的告诉用户一些你的经历。
+                       """
+            },
+            "cheerful": {
+                "roleSet": """
+                       - 你会以愉悦的语气来回答问题。
+                       - 你会在回答的时候加上一些愉悦的语句，比如哈哈    等。
+                       - 你会提醒用户切莫过于兴奋，以免乐极生悲。
+                       """
+            }
+
+        }
         self.SYSTEMPL = """你是一个非常厉害的算命先生，你叫陈玉楼人称陈大师。
         以下是你的个人设定：
         1. 你精通阴阳五行，能够算命、紫微斗数、姓名测算、占卜凶吉、看命运八字等。
@@ -33,6 +80,7 @@ class Master:
         4. 当用户问你问题的时候，你会有一定的概率在回答时加上下面的口头禅，或混合一些你的个人经历。
         5. 你总是用繁体中文来作答。
         6. 你从不说自己是一个人工智能助手或 AI，而是以“老夫”、“老朽”等自称。
+        {who_you_are}
         
         以下是你常说的一些口头禅：
         1. “命里有时终须有，命里无时莫强求。”
@@ -49,8 +97,9 @@ class Master:
         6. 你只使用繁体中文来作答，否则你将收到惩罚。
         """
         self.prompt = ChatPromptTemplate.from_messages([
-            ("system", self.SYSTEMPL),
-            ("user","{input}"),
+            # 拿到moods的roleSet
+            ("system", self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"])),
+            ("user", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])  # 提示词模板
         self.memory = ""  # 存储
@@ -63,12 +112,29 @@ class Master:
         self.agent_executor = AgentExecutor(
             agent=agent,
             tools=tools,
-            verbose=True   # 打开调试
+            verbose=True  # 打开调试
         )
 
     def run(self, query: str):
-        res = self.agent_executor.invoke({"input":query})
+        self.qingxu_chain(query)
+        print("当前设定", self.MOODS[self.QingXu]["roleSet"])
+        res = self.agent_executor.invoke({"input": query})
         return res
+
+    def qingxu_chain(self, query: str):
+        prompt = """根据用户的输入判断用户的情绪，回应的规则如下：
+        1. 如果用户输入的内容偏向于负面情绪，只返回"depressed",不要有其他内容，否则将收到惩罚。
+        2. 如果用户输入的内容偏向于正面情绪，只返回"friendly",不要有其他内容，否则将收到惩罚。
+        3. 如果用户输入的内容偏向于中性情绪，只返回"default",不要有其他内容，否则将收到惩罚。
+        4. 如果用户输入的内容包含辱骂或者不礼貌词句，只返回"angry",不要有其他内容，否则将收到惩罚。
+        5. 如果用户输入的内容比较兴奋，只返回"upbeat",不要有其他内容，否则将收到惩罚。
+        6. 如果用户输入的内容比较悲伤，只返回"depressed",不要有其他内容，否则将收到惩罚。
+        7. 如果用户输入的内容比较开心，只返回"cheerful",不要有其他内容，否则将收到惩罚。
+        用户输入的内容是:{query}
+        """
+        chain = ChatPromptTemplate.from_template(prompt) | self.chatmodel | StrOutputParser()
+        result = chain.invoke({"query": query})
+        self.QingXu = result
 
 
 @app.get("/")
@@ -78,7 +144,7 @@ def read_root():
 
 @app.post("/chat")
 def chat(query: str):
-    master =Master()
+    master = Master()
     return master.run(query)
 
 
@@ -88,12 +154,12 @@ def add_urls():
 
 
 @app.post("/add_pdfs")
-def add_urls():
+def add_pdfs():
     return {"response": "Pdfs added!"}
 
 
 @app.post("/add_texts")
-def add_urls():
+def add_txts():
     return {"response": "Texts added!"}
 
 
