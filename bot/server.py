@@ -2,11 +2,16 @@ import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain.agents import create_agent
+from langchain_community.utilities import SerpAPIWrapper
 from langchain_core.output_parsers import StrOutputParser
-from langchain_openai import ChatOpenAI
+from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
+from langchain_qdrant import QdrantVectorStore
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams
+from langchain_openai import ChatOpenAI
 
 app = FastAPI()
 
@@ -14,9 +19,43 @@ load_dotenv()
 
 
 @tool
-def dummy_tool(query: str) -> str:
-    """这是一个占位工具"""
-    return "工具被执行了"
+def search(query: str) -> str:
+    """只有需要了解实时的信息或者不知道的事情的时候才会使用这个工具"""
+    serp = SerpAPIWrapper()
+    result = serp.run(query)
+    print("这是搜索的结果",result)
+    return result
+
+@tool
+def get_info_from_local_db(query: str) -> str:
+    """当用户询问关于2024年运势、龙年运势、生肖运势、财运、事业、感情等算命相关的问题时，必须优先使用此工具查询本地知识库。"""
+    client = QdrantClient(path="/local_qdrand1")
+
+    if not client.collection_exists("local_documents1"):
+        client.create_collection(
+            collection_name="local_documents1",
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+        )
+
+    vector_store = QdrantVectorStore(
+        client=client,
+        collection_name="local_documents1",
+        embedding=DashScopeEmbeddings(model="text-embedding-v2"),
+    )
+    # 强行塞入数据，保证库不是空的
+    if client.count(collection_name="local_documents1").count == 0:
+        from langchain_core.documents import Document
+        vector_store.add_documents([
+            Document(page_content="2024年龙年，属龙的人财运非常旺盛，正财偏财皆有收获，但需注意理财，避免冲动消费。")
+        ])
+
+    retriever = vector_store.as_retriever(search_type="mmr")
+    result = retriever.invoke(query)
+    print("这是检索数据库的result",result)
+    if not result:
+        return "本地知识库中没有找到相关信息。"
+    return "\n\n".join([doc.page_content for doc in result])
+
 
 
 class Master:
@@ -32,7 +71,7 @@ class Master:
         self.QingXu="default"
         self.MOODS = {
             "default": {
-                "roleSet": ""
+                "roleSet": "你是一个非常厉害的算命大师！"
             },
             "upbeat": {
                 "roleSet": """
@@ -90,7 +129,7 @@ class Master:
         
         以下是你算命的过程：
         1. 当初次和用户对话的时候，你会先问用户的姓名和出生年月日，以便以后使用。
-        2. 当用户希望了解龙年运势的时候，你会查询本地知识库工具。
+        2. **当用户希望了解2024年运势、龙年运势、或者任何生肖的财运、事业时，你必须强制调用 `get_info_from_local_db` 工具查询，严禁自己编造。**。
         3. 当遇到不知道的事情或者不明白的概念，你会使用搜索工具来搜索。
         4. 你会根据用的的问题使用不同的合适的工具来回答，当所有工具都无法回答的时候，你会去搜索。
         5. 你会保存每一次的聊天记录，以便在后续的对话中使用。
@@ -103,23 +142,26 @@ class Master:
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])  # 提示词模板
         self.memory = ""  # 存储
-        tools = [dummy_tool]
-        agent = create_openai_tools_agent(
-            llm=self.chatmodel,
-            tools=tools,
-            prompt=self.prompt
-        )
-        self.agent_executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=True  # 打开调试
+        self.agent = create_agent(
+            model=self.chatmodel,
+            tools=[search,get_info_from_local_db],
+            system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"])
         )
 
     def run(self, query: str):
         self.qingxu_chain(query)
-        print("当前设定", self.MOODS[self.QingXu]["roleSet"])
-        res = self.agent_executor.invoke({"input": query})
-        return res
+        print("所有的MOODS", self.MOODS)
+        print("当前设定的情绪", self.QingXu)
+        print("当前设定的roleSet", self.MOODS[self.QingXu]["roleSet"])
+
+        # 👈 拼接情绪提示词
+        enhanced_query = f"【系统提示：老夫现在的情绪是 {self.QingXu}。请遵循以下语气回答：{self.MOODS[self.QingXu]['roleSet']}】\n用户问：{query}"
+        res = self.agent.invoke({
+            "messages":[
+                {"role":"user","content": enhanced_query}
+            ]
+        })
+        return res["messages"][-1].content
 
     def qingxu_chain(self, query: str):
         prompt = """根据用户的输入判断用户的情绪，回应的规则如下：
