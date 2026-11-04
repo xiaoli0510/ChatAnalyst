@@ -1,62 +1,15 @@
 import os
-
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from langchain.agents import create_agent
-from langchain_community.utilities import SerpAPIWrapper
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.tools import tool
-from langchain_qdrant import QdrantVectorStore
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams
 from langchain_openai import ChatOpenAI
+from MyTools import *
 
 app = FastAPI()
 
 load_dotenv()
-
-
-@tool
-def search(query: str) -> str:
-    """只有需要了解实时的信息或者不知道的事情的时候才会使用这个工具"""
-    serp = SerpAPIWrapper()
-    result = serp.run(query)
-    print("这是搜索的结果",result)
-    return result
-
-@tool
-def get_info_from_local_db(query: str) -> str:
-    """当用户询问关于2024年运势、龙年运势、生肖运势、财运、事业、感情等算命相关的问题时，必须优先使用此工具查询本地知识库。"""
-    client = QdrantClient(path="/local_qdrand1")
-
-    if not client.collection_exists("local_documents1"):
-        client.create_collection(
-            collection_name="local_documents1",
-            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
-        )
-
-    vector_store = QdrantVectorStore(
-        client=client,
-        collection_name="local_documents1",
-        embedding=DashScopeEmbeddings(model="text-embedding-v2"),
-    )
-    # 强行塞入数据，保证库不是空的
-    if client.count(collection_name="local_documents1").count == 0:
-        from langchain_core.documents import Document
-        vector_store.add_documents([
-            Document(page_content="2024年龙年，属龙的人财运非常旺盛，正财偏财皆有收获，但需注意理财，避免冲动消费。")
-        ])
-
-    retriever = vector_store.as_retriever(search_type="mmr")
-    result = retriever.invoke(query)
-    print("这是检索数据库的result",result)
-    if not result:
-        return "本地知识库中没有找到相关信息。"
-    return "\n\n".join([doc.page_content for doc in result])
-
-
 
 class Master:
     def __init__(self):
@@ -144,7 +97,7 @@ class Master:
         self.memory = ""  # 存储
         self.agent = create_agent(
             model=self.chatmodel,
-            tools=[search,get_info_from_local_db],
+            tools=[search,get_info_from_local_db,bazi_cesuan],
             system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"])
         )
 
@@ -225,4 +178,4 @@ def read_item(item_id: int, q: str | None = None):
 if __name__ == '__main__':
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload = True)
