@@ -1,18 +1,20 @@
-import os
-from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from langchain.agents import create_agent
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
+from langchain_core.prompts import MessagesPlaceholder
 from MyTools import *
+from langgraph.checkpoint.sqlite import SqliteSaver
+import sqlite3
 
 app = FastAPI()
 
 load_dotenv()
 
+conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
+checkpointer = SqliteSaver(conn)
+
 class Master:
-    def __init__(self):
+    def __init__(self,checkpointer):
         self.chatmodel = ChatOpenAI(
             model="qwen-max",
             temperature=0,
@@ -97,11 +99,12 @@ class Master:
         self.memory = ""  # 存储
         self.agent = create_agent(
             model=self.chatmodel,
-            tools=[search,get_info_from_local_db,bazi_cesuan,yaoyiguan],
-            system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"])
+            tools=[search,get_info_from_local_db,bazi_cesuan,yaoyiguan,jiemeng],
+            system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"]),
+            checkpointer=checkpointer
         )
 
-    def run(self, query: str):
+    def run(self, query: str,session_id: str = "default_user"):
         self.qingxu_chain(query)
         print("所有的MOODS", self.MOODS)
         print("当前设定的情绪", self.QingXu)
@@ -109,11 +112,13 @@ class Master:
 
         # 👈 拼接情绪提示词
         enhanced_query = f"【系统提示：老夫现在的情绪是 {self.QingXu}。请遵循以下语气回答：{self.MOODS[self.QingXu]['roleSet']}】\n用户问：{query}"
+        config = {"configurable": {"thread_id": session_id}}
         res = self.agent.invoke({
             "messages":[
                 {"role":"user","content": enhanced_query}
-            ]
-        })
+            ],
+        },
+        config = config)
         return res["messages"][-1].content
 
     def qingxu_chain(self, query: str):
@@ -131,6 +136,7 @@ class Master:
         result = chain.invoke({"query": query})
         self.QingXu = result
 
+master = Master(checkpointer)
 
 @app.get("/")
 def read_root():
@@ -138,9 +144,8 @@ def read_root():
 
 
 @app.post("/chat")
-def chat(query: str):
-    master = Master()
-    return master.run(query)
+def chat(query: str, session_id: str = "user_001"):
+    return {"response": master.run(query, session_id=session_id)}
 
 
 @app.post("/add_urls")

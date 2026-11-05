@@ -98,7 +98,7 @@ def bazi_cesuan(query: str):
         if result.status_code == 200:
             json = result.json()
             print("获取到的八字json是：",json)
-            return json["data"]["base_info"]
+            return str(json["data"]["base_info"])
         else:
             return f"获取八字异常，状态码:{result.status_code}"
     except Exception as e:
@@ -113,8 +113,33 @@ def yaoyiguan():
     if result.status_code == 200:
         json = result.json()
         print("摇一卦的json结果",json)
-        return json["data"]
+        return str(json["data"])
     else:
         return f"请求yaoyiguan异常，状态码:{result.status_code}"
+
+@tool
+def jiemeng(query: str):
+    """只有解梦的时候才会使用这个工具，通过输入梦境关键字来查询梦境释意"""
+    url = "https://api.yuanfenju.com/index.php/v1/Gongju/zhougong"
+    prompt = ChatPromptTemplate.from_template("根据内容提取一个关键词，只返回一个关键词(必须使用简体中文)，，内容为{topic}")
+    prompt_value =prompt.invoke({"topic": query})
+    llm = ChatOpenAI(
+        model="qwen-max",
+        temperature=0,
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    keyword = llm.invoke(prompt_value)
+    print("提取的关键词是：",keyword.content)
+
+    result = requests.post(url, data={"api_key": os.getenv("BAZI_API_KEY"),"title_zhougong": keyword.content},
+                           headers={"Content-Type": "application/x-www-form-urlencoded"})
+    if result.status_code == 200:
+        json = result.json()
+        print("解梦的结果", json)
+        return str(json["data"][:2])
+    else:
+        return f"请求解梦异常，状态码:{result.status_code}"
+
 
 
