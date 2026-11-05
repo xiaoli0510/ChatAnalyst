@@ -97,7 +97,7 @@ class Master:
         self.memory = ""  # 存储
         self.agent = create_agent(
             model=self.chatmodel,
-            tools=[search,get_info_from_local_db,bazi_cesuan],
+            tools=[search,get_info_from_local_db,bazi_cesuan,yaoyiguan],
             system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"])
         )
 
