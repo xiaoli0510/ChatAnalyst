@@ -1,7 +1,10 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from langchain.agents import create_agent
+from langchain_community.document_loaders import WebBaseLoader
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import MessagesPlaceholder
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 from MyTools import *
 from langgraph.checkpoint.sqlite import SqliteSaver
 import sqlite3
@@ -13,8 +16,9 @@ load_dotenv()
 conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
 checkpointer = SqliteSaver(conn)
 
+
 class Master:
-    def __init__(self,checkpointer):
+    def __init__(self, checkpointer):
         self.chatmodel = ChatOpenAI(
             model="qwen-max",
             temperature=0,
@@ -23,7 +27,7 @@ class Master:
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
         )  # 聊天模型
         self.MEMORY_KEY = "chat_history"  # 存的key
-        self.QingXu="default"
+        self.QingXu = "default"
         self.MOODS = {
             "default": {
                 "roleSet": "你是一个非常厉害的算命大师！"
@@ -99,12 +103,12 @@ class Master:
         self.memory = ""  # 存储
         self.agent = create_agent(
             model=self.chatmodel,
-            tools=[search,get_info_from_local_db,bazi_cesuan,yaoyiguan,jiemeng],
+            tools=[search, get_info_from_local_db, bazi_cesuan, yaoyiguan, jiemeng],
             system_prompt=self.SYSTEMPL.format(who_you_are=self.MOODS[self.QingXu]["roleSet"]),
             checkpointer=checkpointer
         )
 
-    def run(self, query: str,session_id: str = "default_user"):
+    def run(self, query: str, session_id: str = "default_user"):
         self.qingxu_chain(query)
         print("所有的MOODS", self.MOODS)
         print("当前设定的情绪", self.QingXu)
@@ -114,11 +118,11 @@ class Master:
         enhanced_query = f"【系统提示：老夫现在的情绪是 {self.QingXu}。请遵循以下语气回答：{self.MOODS[self.QingXu]['roleSet']}】\n用户问：{query}"
         config = {"configurable": {"thread_id": session_id}}
         res = self.agent.invoke({
-            "messages":[
-                {"role":"user","content": enhanced_query}
+            "messages": [
+                {"role": "user", "content": enhanced_query}
             ],
         },
-        config = config)
+            config=config)
         return res["messages"][-1].content
 
     def qingxu_chain(self, query: str):
@@ -136,7 +140,9 @@ class Master:
         result = chain.invoke({"query": query})
         self.QingXu = result
 
+
 master = Master(checkpointer)
+
 
 @app.get("/")
 def read_root():
@@ -149,8 +155,27 @@ def chat(query: str, session_id: str = "user_001"):
 
 
 @app.post("/add_urls")
-def add_urls():
-    return {"response": "Urls added!"}
+def add_urls(URL: str):
+    loader = WebBaseLoader(URL)
+    docs = loader.load()
+    documents = RecursiveCharacterTextSplitter().split_documents(docs)
+    client = QdrantClient(path="./local_qdrand1")
+    if not client.collection_exists("local_documents1"):
+        client.create_collection(
+            collection_name="local_documents1",
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+        )
+
+    vector_store = QdrantVectorStore(
+        client=client, collection_name="local_documents1", embedding=DashScopeEmbeddings(model="text-embedding-v2")
+    )
+
+    vector_store.add_documents(
+        documents,
+    )
+    print("向量数据库创建完成了")
+    print(vector_store._client.collection_exists("local_documents1"))
+    return {"ok": "Urls added!"}
 
 
 @app.post("/add_pdfs")
@@ -183,4 +208,4 @@ def read_item(item_id: int, q: str | None = None):
 if __name__ == '__main__':
     import uvicorn
 
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload = True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

@@ -25,7 +25,7 @@ def search(query: str) -> str:
 @tool
 def get_info_from_local_db(query: str) -> str:
     """当用户询问关于2024年运势、龙年运势、生肖运势、财运、事业、感情等算命相关的问题时，必须优先使用此工具查询本地知识库。"""
-    client = QdrantClient(path="/local_qdrand1")
+    client = QdrantClient(path="./local_qdrand1")
 
     if not client.collection_exists("local_documents1"):
         client.create_collection(
