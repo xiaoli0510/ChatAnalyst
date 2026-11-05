@@ -105,6 +105,16 @@ def bazi_cesuan(query: str):
         print(f"八字请求报错了，{e}")
         return "八字请求异常"
 
-
+@tool
+def yaoyiguan():
+    """只有用户想要占卜抽签的时候才会使用这个工具。"""
+    url="https://api.yuanfenju.com/index.php/v1/Zhanbu/meiri"
+    result = requests.post(url, data={"api_key": os.getenv("BAZI_API_KEY")},  headers={"Content-Type": "application/x-www-form-urlencoded"})
+    if result.status_code == 200:
+        json = result.json()
+        print("摇一卦的json结果",json)
+        return json["data"]
+    else:
+        return f"请求yaoyiguan异常，状态码:{result.status_code}"
 
 
